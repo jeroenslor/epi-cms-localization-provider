@@ -159,6 +159,7 @@
     <Compile Include="Providers\CmsLocalizationProvider.cs" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="EPi.CmsLocalizationProvider.nuspec" />
     <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
