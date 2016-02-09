@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <package >
   <metadata>
-    <id>$id$</id>
-    <version>$version$</version>
-    <title>$title$</title>
+    <id>EPi.CmsLocalizationProvider</id>
+    <version>1.0.0.0</version>
+    <title>EPiServer CmsLocalizationProvider</title>
     <authors>Jeroen Slor</authors>
     <owners>Jeroen Slor</owners>    
     <projectUrl>https://github.com/jeroenslor/epi-cms-localization-provider</projectUrl>    
@@ -11,5 +11,8 @@
     <description>A custom LocalizationProvider that uses auto generated cms pages to manage label translations instead of the lang.xml files</description>    
     <copyright>Copyright 2016</copyright>
     <tags>EPiServer Localization</tags>
-  </metadata>
+    <dependencies>
+      <dependency id="EPiServer.CMS.Core" version="9.0" />
+    </dependencies>
+  </metadata>  
 </package>
