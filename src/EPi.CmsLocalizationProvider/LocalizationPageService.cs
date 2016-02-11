@@ -5,7 +5,7 @@ using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using EPi.CmsLocalizationProvider.PageTypes;
+using EPi.CmsLocalizationProvider.Model;
 using EPiServer;
 using EPiServer.Core;
 using EPiServer.DataAbstraction;
@@ -15,46 +15,29 @@ using EPiServer.Logging;
 using EPiServer.Security;
 using EPiServer.ServiceLocation;
 
-namespace EPi.CmsLocalizationProvider.Helpers
+namespace EPi.CmsLocalizationProvider
 {
-    public class LocalizationPageHelper
+    [ServiceConfiguration(ServiceType = typeof(LocalizationPageService))]
+    public class LocalizationPageService
     {
-        private readonly IContentRepository _contentRepository;
-        private readonly IContentTypeRepository _contentTypeRepository;
-        private readonly IPropertyDefinitionRepository _propertyDefinitionRepository;
-        private readonly ITabDefinitionRepository _tabDefinitionRepository;
-        private readonly IAvailableSettingsRepository _availableContentTypeRepository;
-        private readonly LocalizationConfiguration _configuration;
+        private Injected<IContentRepository> _contentRepository { get; set; }
+        private Injected<IContentTypeRepository> _contentTypeRepository { get; set; }
+        private Injected<IPropertyDefinitionRepository> _propertyDefinitionRepository { get; set; }
+        private Injected<ITabDefinitionRepository> _tabDefinitionRepository { get; set; }
+        private Injected<IAvailableSettingsRepository> _availableContentTypeRepository { get; set; }
+        private Injected<IPropertyDefinitionTypeRepository> _propertyDefinitionTypeRepository { get; set; }
+        private Injected<LocalizationConfiguration> _configuration { get; set; }
         private static readonly object Lock = new object();
         protected static ContentReference CachedLocalizationContainer;
         protected static ConcurrentDictionary<string, ContentReference> CachedLocalizationPages; 
         private readonly PropertyDefinitionType _stringPropertyDefinitionType;
         private static readonly ILogger Logger = LogManager.GetLogger();
 
-        public LocalizationPageHelper()
-            : this(
-                ServiceLocator.Current.GetInstance<IContentRepository>(),
-                ServiceLocator.Current.GetInstance<IContentTypeRepository>(),
-                ServiceLocator.Current.GetInstance<IPropertyDefinitionRepository>(),
-                ServiceLocator.Current.GetInstance<ITabDefinitionRepository>(),
-                ServiceLocator.Current.GetInstance<IPropertyDefinitionTypeRepository>(),
-                ServiceLocator.Current.GetInstance<IAvailableSettingsRepository>(),
-                ServiceLocator.Current.GetInstance<LocalizationConfiguration>())
-        {
-        }
-
-        private LocalizationPageHelper(IContentRepository contentRepository, IContentTypeRepository contentTypeRepository, IPropertyDefinitionRepository propertyDefinitionRepository, ITabDefinitionRepository tabDefinitionRepository, IPropertyDefinitionTypeRepository propertyDefinitionTypeRepository, IAvailableSettingsRepository availableContentTypeRepository, LocalizationConfiguration configuration)
+        public LocalizationPageService()
         {
             CachedLocalizationPages = new ConcurrentDictionary<string, ContentReference>();
 
-            _contentRepository = contentRepository;
-            _contentTypeRepository = contentTypeRepository;
-            _propertyDefinitionRepository = propertyDefinitionRepository;
-            _tabDefinitionRepository = tabDefinitionRepository;
-            _availableContentTypeRepository = availableContentTypeRepository;
-            _configuration = configuration;
-
-            _stringPropertyDefinitionType = propertyDefinitionTypeRepository.Load(
+            _stringPropertyDefinitionType = _propertyDefinitionTypeRepository.Service.Load(
                 PropertyDefinitionType.ResolvePropertyDataType(PropertyDataType.LongString));
         }
 
@@ -66,7 +49,7 @@ namespace EPi.CmsLocalizationProvider.Helpers
             string tabName = normalizedKey.Length > 3 ? normalizedKey[2] : SystemTabNames.Content; // ignore the prefix
             var tabDefinition = GetOrCreateTabDefinition(tabName);
 
-            var contentType = _contentTypeRepository.Load(localizationPage.ContentTypeID);
+            var contentType = _contentTypeRepository.Service.Load(localizationPage.ContentTypeID);
             if (contentType.PropertyDefinitions.Any(
                 x => x.Name.Equals(hashedPropertyName, StringComparison.OrdinalIgnoreCase))) return;
 
@@ -78,12 +61,12 @@ namespace EPi.CmsLocalizationProvider.Helpers
 
         public virtual TabDefinition GetOrCreateTabDefinition(string tabName)
         {
-            var tabDefinition = _tabDefinitionRepository.Load(tabName);
+            var tabDefinition = _tabDefinitionRepository.Service.Load(tabName);
 
             if (tabDefinition == null)
             {
-                _tabDefinitionRepository.Save(new TabDefinition(-1, tabName, AccessLevel.Read, -1, false));
-                tabDefinition = _tabDefinitionRepository.Load(tabName);
+                _tabDefinitionRepository.Service.Save(new TabDefinition(-1, tabName, AccessLevel.Read, -1, false));
+                tabDefinition = _tabDefinitionRepository.Service.Load(tabName);
             }
 
             return tabDefinition;
@@ -106,26 +89,26 @@ namespace EPi.CmsLocalizationProvider.Helpers
                 Tab = tabDefinition,
                 Type = _stringPropertyDefinitionType
             };
-            _propertyDefinitionRepository.Save(propertyDefinition);
+            _propertyDefinitionRepository.Service.Save(propertyDefinition);
 
             contentType = (ContentType)contentType.CreateWritableClone();
             contentType.PropertyDefinitions.Add(propertyDefinition);
-            _contentTypeRepository.Save(contentType);
+            _contentTypeRepository.Service.Save(contentType);
         }
 
         public virtual LocalizationContainer AddLocalizationContainer()
         {
-            var containerParent = _contentRepository.Get<IContent>(_configuration.ContainerParent, CultureInfo.InvariantCulture);
+            var containerParent = _contentRepository.Service.Get<IContent>(_configuration.Service.ContainerParent, CultureInfo.InvariantCulture);
 
             var localizable = containerParent as ILocalizable;
             var localizationContainer =
-                _contentRepository.GetDefault<LocalizationContainer>(containerParent.ContentLink,
+                _contentRepository.Service.GetDefault<LocalizationContainer>(containerParent.ContentLink,
                     localizable != null ? localizable.MasterLanguage : new CultureInfo("en"));
             localizationContainer.Name = "Labels";
             
             return
-                _contentRepository.Get<LocalizationContainer>(
-                    _contentRepository.Save(localizationContainer, SaveAction.Publish, AccessLevel.NoAccess),
+                _contentRepository.Service.Get<LocalizationContainer>(
+                    _contentRepository.Service.Save(localizationContainer, SaveAction.Publish, AccessLevel.NoAccess),
                     CultureInfo.InvariantCulture);
         }
 
@@ -137,11 +120,11 @@ namespace EPi.CmsLocalizationProvider.Helpers
 
             var contentType = GetOrCreateContentType(normalizedKey, localizationContainer);
 
-            var localizationPage = _contentRepository.GetDefault<PageData>(localizationContainer.ContentLink,
+            var localizationPage = _contentRepository.Service.GetDefault<PageData>(localizationContainer.ContentLink,
                 contentType.ID, localizationContainer.MasterLanguage);
             localizationPage.Name = normalizedKey[1];
             localizationPage["BasePath"] = normalizedKey[1];
-            _contentRepository.Save(localizationPage, SaveAction.Publish, AccessLevel.NoAccess);
+            _contentRepository.Service.Save(localizationPage, SaveAction.Publish, AccessLevel.NoAccess);
             
             return localizationPage;
         }
@@ -151,7 +134,7 @@ namespace EPi.CmsLocalizationProvider.Helpers
             var basePath = normalizedKey[1];
             var contentTypeName = basePath + "LocalizationPage";
 
-            var existingContentType = _contentTypeRepository.Load(contentTypeName);
+            var existingContentType = _contentTypeRepository.Service.Load(contentTypeName);
             if (existingContentType != null)
                 return existingContentType;
 
@@ -160,7 +143,7 @@ namespace EPi.CmsLocalizationProvider.Helpers
                 Name = contentTypeName,
                 DisplayName = string.Format("[Localization] {0}", contentTypeName),
             };
-            _contentTypeRepository.Save(contentType);
+            _contentTypeRepository.Service.Save(contentType);
             
             var basePathProperty = new PropertyDefinition
             {
@@ -171,17 +154,17 @@ namespace EPi.CmsLocalizationProvider.Helpers
                 Name = "BasePath",
                 Type = _stringPropertyDefinitionType
             };
-            _propertyDefinitionRepository.Save(basePathProperty);
+            _propertyDefinitionRepository.Service.Save(basePathProperty);
             
             var writableClone = (ContentType)contentType.CreateWritableClone();
             writableClone.PropertyDefinitions.Add(basePathProperty);
-            _contentTypeRepository.Save(writableClone);            
+            _contentTypeRepository.Service.Save(writableClone);            
 
-            var containerContentType = _contentTypeRepository.Load(localizationContainer.ContentTypeID);
-            var availableSetting = _availableContentTypeRepository.GetSetting(containerContentType);
+            var containerContentType = _contentTypeRepository.Service.Load(localizationContainer.ContentTypeID);
+            var availableSetting = _availableContentTypeRepository.Service.GetSetting(containerContentType);
             availableSetting.Availability = Availability.Specific;
             availableSetting.AllowedContentTypeNames.Add(contentType.Name);
-            _availableContentTypeRepository.RegisterSetting(containerContentType, availableSetting);
+            _availableContentTypeRepository.Service.RegisterSetting(containerContentType, availableSetting);
 
             return contentType;
         }
@@ -194,7 +177,7 @@ namespace EPi.CmsLocalizationProvider.Helpers
             {
                 try
                 {
-                    return _contentRepository.Get<IContent>(cachedLocalizationPageReference, loaderOptions);
+                    return _contentRepository.Service.Get<IContent>(cachedLocalizationPageReference, loaderOptions);
                 }
                 catch (PageNotFoundException)
                 {
@@ -215,7 +198,7 @@ namespace EPi.CmsLocalizationProvider.Helpers
 
         public virtual IEnumerable<IContent> GetAllLocalizationPages(LoaderOptions loaderOptions)
         {
-            return _contentRepository.GetChildren<IContent>(GetOrAddLocalizationContainer().ContentLink, loaderOptions);
+            return _contentRepository.Service.GetChildren<IContent>(GetOrAddLocalizationContainer().ContentLink, loaderOptions);
         }
 
         public virtual LocalizationContainer GetOrAddLocalizationContainer()
@@ -231,7 +214,7 @@ namespace EPi.CmsLocalizationProvider.Helpers
 
             try
             {
-                return _contentRepository.Get<LocalizationContainer>(CachedLocalizationContainer, LanguageSelector.MasterLanguage());
+                return _contentRepository.Service.Get<LocalizationContainer>(CachedLocalizationContainer, LanguageSelector.MasterLanguage());
             }
             catch (PageNotFoundException)
             {

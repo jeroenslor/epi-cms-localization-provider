@@ -4,13 +4,12 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Globalization;
 using System.Linq;
-using EPi.CmsLocalizationProvider.Helpers;
 using EPiServer.Core;
 using EPiServer.DataAbstraction;
 using EPiServer.Framework.Localization;
 using EPiServer.ServiceLocation;
 
-namespace EPi.CmsLocalizationProvider.Providers
+namespace EPi.CmsLocalizationProvider
 {
     public class CmsLocalizationProvider : LocalizationProvider
     {
@@ -18,21 +17,15 @@ namespace EPi.CmsLocalizationProvider.Providers
         private static readonly object Lock = new object();
         private static bool _updateContent;
         private static string _prefix;
-        private static readonly ConcurrentDictionary<string, string> PropertyDefinitionMapping;
-        private static readonly LocalizationPageHelper LocalizationPageHelper;
-        #endregion
-
-        #region constructors
-        static CmsLocalizationProvider()
-        {
-            PropertyDefinitionMapping = new ConcurrentDictionary<string, string>();
-            LocalizationPageHelper = new LocalizationPageHelper();
-        }
+        private static ConcurrentDictionary<string, string> PropertyDefinitionMapping;
+        private static Injected<LocalizationPageService> LocalizationPageService { get; set; }
         #endregion
 
         public override void Initialize(string name, NameValueCollection config)
         {
             base.Initialize(name, config);
+
+            PropertyDefinitionMapping = new ConcurrentDictionary<string, string>();
 
             bool updateContent;
             _updateContent = !bool.TryParse(config["updateContent"], out updateContent) || updateContent;
@@ -60,7 +53,7 @@ namespace EPi.CmsLocalizationProvider.Providers
 
             // TODO if the normalizedkey length is 1 we need to loop through all the pages and return the result
 
-            var localizationPage = LocalizationPageHelper.GetLocalizationPage(normalizedKey, new LoaderOptions() {LanguageLoaderOption.FallbackWithMaster(culture)});
+            var localizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, new LoaderOptions() {LanguageLoaderOption.FallbackWithMaster(culture)});
             if (localizationPage == null)
                 yield break;
 
@@ -75,17 +68,17 @@ namespace EPi.CmsLocalizationProvider.Providers
 
         private static IContent GetOrAddLocalizationPage(string[] normalizedKey, CultureInfo culture)
         {
-            var localizationPage = LocalizationPageHelper.GetLocalizationPage(normalizedKey,
+            var localizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey,
                 new LoaderOptions() { LanguageLoaderOption.FallbackWithMaster(culture) });
 
             if (localizationPage == null && _updateContent)
                 lock (Lock)
                 {
-                    localizationPage = LocalizationPageHelper.GetLocalizationPage(normalizedKey,
+                    localizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey,
                         new LoaderOptions() { LanguageLoaderOption.FallbackWithMaster(culture) });
 
                     if (localizationPage == null)
-                        localizationPage = LocalizationPageHelper.AddLocalizationPage(normalizedKey);
+                        localizationPage = LocalizationPageService.Service.AddLocalizationPage(normalizedKey);
                 }
 
             return localizationPage;
@@ -97,7 +90,7 @@ namespace EPi.CmsLocalizationProvider.Providers
             string hashedPropertyName;
             if (!PropertyDefinitionMapping.TryGetValue(originalKey, out hashedPropertyName))
             {
-                hashedPropertyName = LocalizationPageHelper.GeneratePropertyName(originalKey);
+                hashedPropertyName = LocalizationPageService.Service.GeneratePropertyName(originalKey);
                 PropertyDefinitionMapping.TryAdd(originalKey, hashedPropertyName);
             }
 
@@ -107,7 +100,7 @@ namespace EPi.CmsLocalizationProvider.Providers
             if (!tryGetValue && _updateContent)
                 lock (Lock)
                     if (!localizationPage.Property.TryGetPropertyValue(hashedPropertyName, out value))
-                        LocalizationPageHelper.UpdatePageTypeDefinition(localizationPage, originalKey, normalizedKey, hashedPropertyName);
+                        LocalizationPageService.Service.UpdatePageTypeDefinition(localizationPage, originalKey, normalizedKey, hashedPropertyName);
 
             return value;
         }        

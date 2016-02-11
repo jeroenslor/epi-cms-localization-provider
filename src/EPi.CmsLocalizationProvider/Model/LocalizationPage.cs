@@ -2,7 +2,7 @@
 using EPiServer.Core;
 using EPiServer.DataAnnotations;
 
-namespace EPi.CmsLocalizationProvider.PageTypes
+namespace EPi.CmsLocalizationProvider.Model
 {
     [ContentType(
         DisplayName = "Localization Page",
