@@ -119,23 +119,18 @@ namespace EPi.CmsLocalizationProvider
         public virtual IContent AddLocalizationPage(string[] normalizedKey)
         {
             var localizationContainer = GetOrAddLocalizationContainer();
-            if (localizationContainer == null)
-                return null;
-
-            var contentType = GetOrCreateContentType(normalizedKey, localizationContainer);
-
-            var localizationPage = _contentRepository.Service.GetDefault<PageData>(localizationContainer.ContentLink,
-                contentType.ID, localizationContainer.MasterLanguage);
-            localizationPage.Name = normalizedKey[1];
-            localizationPage["BasePath"] = normalizedKey[1];
-            _contentRepository.Service.Save(localizationPage, SaveAction.Publish, AccessLevel.NoAccess);
-            
-            return localizationPage;
+            return AddLocalizationPage(normalizedKey, localizationContainer);
         }
 
         public virtual IContent AddLocalizationPage(string[] normalizedKey, SiteDefinition site)
         {
             var localizationContainer = GetOrAddLocalizationContainer(site);
+            return AddLocalizationPage(normalizedKey, localizationContainer);
+            
+        }
+
+        public virtual IContent AddLocalizationPage(string[] normalizedKey, LocalizationContainer localizationContainer)
+        {
             if (localizationContainer == null)
                 return null;
 
@@ -335,7 +330,12 @@ namespace EPi.CmsLocalizationProvider
             try
             {
                 // Just get the LocalizationContainer from the root of EPiServer.
-                return _contentRepository.Service.GetChildren<LocalizationContainer>(rootPage, languageSelector.Language).FirstOrDefault(x => x != null);
+                var containers =  _contentRepository.Service.GetChildren<LocalizationContainer>(rootPage, languageSelector.Language).Where(x => x != null);
+
+                if (containers.Count() > 1)
+                    throw new InvalidOperationException("The root page has more than 1 instance of the Localizations container in its children, this is not allowed");
+
+                return containers.Single();
             }
             catch (ContentProviderNotFoundException)
             {
@@ -357,6 +357,7 @@ namespace EPi.CmsLocalizationProvider
 
             try
             {
+                // Search for a single LocalizationContainer throughout the current site.
                 var criteria = new PropertyCriteria
                 {
                     Condition = CompareCondition.Equal,
@@ -371,7 +372,7 @@ namespace EPi.CmsLocalizationProvider
                 var localizationPages = DataFactory.Instance.FindPagesWithCriteria(siteHomePage.PageLink, new PropertyCriteriaCollection { criteria }, null, languageSelector);
 
                 if (localizationPages.Count > 1)
-                    throw new InvalidOperationException("This site contains more then 1 instance of the Localizations container this is not allowed");
+                    throw new InvalidOperationException("This site contains more than 1 instance of the Localizations container this is not allowed");
 
                 return (LocalizationContainer)localizationPages.FirstOrDefault();
             }
