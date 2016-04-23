@@ -1,10 +1,10 @@
 ﻿using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using EPi.CmsLocalizationProvider.Caching;
 using EPi.CmsLocalizationProvider.Model;
 using EPiServer;
 using EPiServer.Core;
@@ -14,6 +14,7 @@ using EPiServer.Filters;
 using EPiServer.Logging;
 using EPiServer.Security;
 using EPiServer.ServiceLocation;
+using EPiServer.Web;
 
 namespace EPi.CmsLocalizationProvider
 {
@@ -26,17 +27,12 @@ namespace EPi.CmsLocalizationProvider
         private Injected<ITabDefinitionRepository> _tabDefinitionRepository { get; set; }
         private Injected<IAvailableSettingsRepository> _availableContentTypeRepository { get; set; }
         private Injected<IPropertyDefinitionTypeRepository> _propertyDefinitionTypeRepository { get; set; }
-        private Injected<LocalizationConfiguration> _configuration { get; set; }
         private static readonly object Lock = new object();
-        protected static ContentReference CachedLocalizationContainer;
-        protected static ConcurrentDictionary<string, ContentReference> CachedLocalizationPages; 
         private readonly PropertyDefinitionType _stringPropertyDefinitionType;
         private static readonly ILogger Logger = LogManager.GetLogger();
 
         public LocalizationPageService()
         {
-            CachedLocalizationPages = new ConcurrentDictionary<string, ContentReference>();
-
             _stringPropertyDefinitionType = _propertyDefinitionTypeRepository.Service.Load(
                 PropertyDefinitionType.ResolvePropertyDataType(PropertyDataType.LongString));
         }
@@ -98,16 +94,24 @@ namespace EPi.CmsLocalizationProvider
 
         public virtual LocalizationContainer AddLocalizationContainer()
         {
-            var containerParent = _contentRepository.Service.Get<IContent>(_configuration.Service.ContainerParent, CultureInfo.InvariantCulture);
+            return AddLocalizationContainer(ContentReference.RootPage);
+        }
+
+        public virtual LocalizationContainer AddLocalizationContainer(SiteDefinition site)
+        {
+            return AddLocalizationContainer(site.StartPage);
+        }
+
+        public virtual LocalizationContainer AddLocalizationContainer(ContentReference contentReference)
+        {
+            var containerParent = _contentRepository.Service.Get<IContent>(contentReference, CultureInfo.InvariantCulture);
 
             var localizable = containerParent as ILocalizable;
-            var localizationContainer =
-                _contentRepository.Service.GetDefault<LocalizationContainer>(containerParent.ContentLink,
+            var localizationContainer = _contentRepository.Service.GetDefault<LocalizationContainer>(containerParent.ContentLink,
                     localizable != null ? localizable.MasterLanguage : new CultureInfo("en"));
             localizationContainer.Name = "Labels";
-            
-            return
-                _contentRepository.Service.Get<LocalizationContainer>(
+
+            return _contentRepository.Service.Get<LocalizationContainer>(
                     _contentRepository.Service.Save(localizationContainer, SaveAction.Publish, AccessLevel.NoAccess),
                     CultureInfo.InvariantCulture);
         }
@@ -126,6 +130,23 @@ namespace EPi.CmsLocalizationProvider
             localizationPage["BasePath"] = normalizedKey[1];
             _contentRepository.Service.Save(localizationPage, SaveAction.Publish, AccessLevel.NoAccess);
             
+            return localizationPage;
+        }
+
+        public virtual IContent AddLocalizationPage(string[] normalizedKey, SiteDefinition site)
+        {
+            var localizationContainer = GetOrAddLocalizationContainer(site);
+            if (localizationContainer == null)
+                return null;
+
+            var contentType = GetOrCreateContentType(normalizedKey, localizationContainer);
+
+            var localizationPage = _contentRepository.Service.GetDefault<PageData>(localizationContainer.ContentLink,
+                contentType.ID, localizationContainer.MasterLanguage);
+            localizationPage.Name = normalizedKey[1];
+            localizationPage["BasePath"] = normalizedKey[1];
+            _contentRepository.Service.Save(localizationPage, SaveAction.Publish, AccessLevel.NoAccess);
+
             return localizationPage;
         }
 
@@ -173,25 +194,59 @@ namespace EPi.CmsLocalizationProvider
         {
             ContentReference cachedLocalizationPageReference;
             var basePath = normalizedKey[1];
-            if (CachedLocalizationPages.TryGetValue(basePath, out cachedLocalizationPageReference))
+            IContent localizationPage;
+            using (var accessor = new LocalizationCacheAccessor())
             {
-                try
+                if (accessor.Cache.TryGetPage(basePath, out cachedLocalizationPageReference))
                 {
-                    return _contentRepository.Service.Get<IContent>(cachedLocalizationPageReference, loaderOptions);
+                    try
+                    {
+                        return _contentRepository.Service.Get<IContent>(cachedLocalizationPageReference, loaderOptions);
+                    }
+                    catch (PageNotFoundException)
+                    {
+                        // this can happen when we cached the localization pagereference but the page has been removed mean while.
+                        accessor.Cache.RemovePage(basePath);
+                    }
                 }
-                catch (PageNotFoundException)
-                {
-                    // this can happen when we cached the localization pagereference but the page has been removed mean while.
-                    ContentReference removedReference;
-                    CachedLocalizationPages.TryRemove(basePath, out removedReference);
-                }
-            }
 
-            var localizationPages = GetAllLocalizationPages(loaderOptions);
-            var localizationPage = localizationPages.SingleOrDefault(
-                x => x.Property.GetPropertyValue<string>("BasePath").Equals(basePath, StringComparison.OrdinalIgnoreCase));
-            if (localizationPage != null)
-                CachedLocalizationPages.TryAdd(basePath, localizationPage.ContentLink);
+                var localizationPages = GetAllLocalizationPages(loaderOptions);
+                localizationPage = localizationPages.SingleOrDefault(
+                    x => x.Property.GetPropertyValue<string>("BasePath").Equals(basePath, StringComparison.OrdinalIgnoreCase));
+                if (localizationPage != null)
+                    accessor.Cache.AddOrUpdatePage(basePath, localizationPage.ContentLink);
+            }
+                
+
+            return localizationPage;
+        }
+
+        public virtual IContent GetLocalizationPage(string[] normalizedKey, SiteDefinition site, LoaderOptions loaderOptions)
+        {
+            ContentReference cachedLocalizationPageReference;
+            var basePath = normalizedKey[1];
+            IContent localizationPage;
+            using (var accessor = new LocalizationCacheAccessor())
+            {
+                if (accessor.Cache.TryGetPage(basePath, site, out cachedLocalizationPageReference))
+                {
+                    try
+                    {
+                        return _contentRepository.Service.Get<IContent>(cachedLocalizationPageReference, loaderOptions);
+                    }
+                    catch (PageNotFoundException)
+                    {
+                        // this can happen when we cached the localization pagereference but the page has been removed mean while.
+                        accessor.Cache.RemovePage(site, basePath);
+                    }
+                }
+
+                var localizationPages = GetAllLocalizationPages(site, loaderOptions);
+                localizationPage = localizationPages.SingleOrDefault(
+                    x => x.Property.GetPropertyValue<string>("BasePath").Equals(basePath, StringComparison.OrdinalIgnoreCase));
+                if (localizationPage != null)
+                    accessor.Cache.AddOrUpdatePage(basePath, site, localizationPage.ContentLink);
+            }
 
             return localizationPage;
         }
@@ -201,31 +256,96 @@ namespace EPi.CmsLocalizationProvider
             return _contentRepository.Service.GetChildren<IContent>(GetOrAddLocalizationContainer().ContentLink, loaderOptions);
         }
 
+        public virtual IEnumerable<IContent> GetAllLocalizationPages(SiteDefinition site, LoaderOptions loaderOptions)
+        {
+            return _contentRepository.Service.GetChildren<IContent>(GetOrAddLocalizationContainer(site).ContentLink, loaderOptions);
+        }
+
         public virtual LocalizationContainer GetOrAddLocalizationContainer()
         {
-            if (CachedLocalizationContainer == null)
-                lock (Lock)
-                {
-                    var findLocalizationContainer = FindLocalizationContainer(LanguageSelector.MasterLanguage()) ?? AddLocalizationContainer();
+            using (var accessor = new LocalizationCacheAccessor())
+            {
+                ContentReference cachedRootContainerContentReference;
 
-                    CachedLocalizationContainer = findLocalizationContainer.ContentLink;
-                    return findLocalizationContainer;
+                if (!accessor.Cache.TryGetContainer(out cachedRootContainerContentReference) || cachedRootContainerContentReference == null)
+                {
+                    lock (Lock)
+                    {
+                        var findLocalizationContainer = FindLocalizationContainer(LanguageSelector.MasterLanguage()) ?? AddLocalizationContainer();
+                        accessor.Cache.AddOrUpdateContainer(findLocalizationContainer.ContentLink);
+                        return findLocalizationContainer;
+                    }
                 }
 
-            try
-            {
-                return _contentRepository.Service.Get<LocalizationContainer>(CachedLocalizationContainer, LanguageSelector.MasterLanguage());
-            }
-            catch (PageNotFoundException)
-            {
-                // this can happen when we cached the localization pagereference but the page has been removed mean while.
-                var newLocalizationContainer = AddLocalizationContainer();
-                CachedLocalizationContainer = newLocalizationContainer.ContentLink;
-                return newLocalizationContainer;
+                try
+                {
+                    return _contentRepository.Service.Get<LocalizationContainer>(cachedRootContainerContentReference, LanguageSelector.MasterLanguage()); 
+                }
+                catch (PageNotFoundException)
+                {
+                    // this can happen when we cached the localization pagereference but the page has been removed mean while.
+                    var newLocalizationContainer = AddLocalizationContainer();
+                    accessor.Cache.AddOrUpdateContainer(newLocalizationContainer.ContentLink);
+                    return newLocalizationContainer;
+                }
             }
         }
 
+        public virtual LocalizationContainer GetOrAddLocalizationContainer(SiteDefinition site)
+        {
+            using (var accessor = new LocalizationCacheAccessor())
+            {
+                ContentReference cachedRootContainerContentReference;
+
+                if (!accessor.Cache.TryGetContainer(site, out cachedRootContainerContentReference) || cachedRootContainerContentReference == null)
+                {
+                    lock (Lock)
+                    {
+                        var findLocalizationContainer = FindLocalizationContainer(site, LanguageSelector.MasterLanguage()) ?? AddLocalizationContainer(site);
+                        accessor.Cache.AddOrUpdateContainer(site, findLocalizationContainer.ContentLink);
+                        return findLocalizationContainer;
+                    }
+                }
+
+                try
+                {
+                    return _contentRepository.Service.Get<LocalizationContainer>(cachedRootContainerContentReference, LanguageSelector.MasterLanguage());
+                }
+                catch (PageNotFoundException)
+                {
+                    // this can happen when we cached the localization pagereference but the page has been removed mean while.
+                    var newLocalizationContainer = AddLocalizationContainer(site);
+                    accessor.Cache.AddOrUpdateContainer(site, newLocalizationContainer.ContentLink);
+                    return newLocalizationContainer;
+                }
+            }
+
+        }
+
         protected virtual LocalizationContainer FindLocalizationContainer(ILanguageSelector languageSelector)
+        {
+            var rootPage = ContentReference.RootPage;
+            if (rootPage == null)
+            {
+                // the GetString method is called before EPiServer is fully initialized.
+                // If this is the case we are not able to return any resources since we depend on the epi cms api
+                return null;
+            }
+
+            try
+            {
+                // Just get the LocalizationContainer from the root of EPiServer.
+                return _contentRepository.Service.GetChildren<LocalizationContainer>(rootPage, languageSelector.Language).FirstOrDefault(x => x != null);
+            }
+            catch (ContentProviderNotFoundException)
+            {
+                // the GetString method is called before EPiServer is fully initialized. 
+                // If this is the case we are not able to return any resources since we depend on the epi cms api                        
+                return null;
+            }            
+        }
+
+        protected virtual LocalizationContainer FindLocalizationContainer(SiteDefinition site, ILanguageSelector languageSelector)
         {
             var rootPage = ContentReference.RootPage;
             if (rootPage == null)
@@ -246,19 +366,21 @@ namespace EPi.CmsLocalizationProvider
                     Type = PropertyDataType.PageType
                 };
 
-                var localizationPages = DataFactory.Instance.FindPagesWithCriteria(rootPage, new PropertyCriteriaCollection {criteria}, null, languageSelector);
+                var siteHomePage = _contentRepository.Service.Get<PageData>(site.StartPage);
 
-                if(localizationPages.Count > 1)
-                    throw new InvalidOperationException("The cms tree contains more then 1 instance of the Localizations container this is not allowed");
+                var localizationPages = DataFactory.Instance.FindPagesWithCriteria(siteHomePage.PageLink, new PropertyCriteriaCollection { criteria }, null, languageSelector);
 
-                return (LocalizationContainer) localizationPages.FirstOrDefault();
+                if (localizationPages.Count > 1)
+                    throw new InvalidOperationException("This site contains more then 1 instance of the Localizations container this is not allowed");
+
+                return (LocalizationContainer)localizationPages.FirstOrDefault();
             }
             catch (ContentProviderNotFoundException)
             {
                 // the GetString method is called before EPiServer is fully initialized. 
                 // If this is the case we are not able to return any resources since we depend on the epi cms api                        
                 return null;
-            }            
+            }
         }
 
         /// <summary>
