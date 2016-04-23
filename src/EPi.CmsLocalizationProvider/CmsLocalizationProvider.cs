@@ -18,6 +18,7 @@ namespace EPi.CmsLocalizationProvider
         #region fields
         private static readonly object Lock = new object();
         private static bool _updateContent;
+        private static bool _useSiteContainers;
         private static string _prefix;
         private static ConcurrentDictionary<string, string> PropertyDefinitionMapping;
         private static Injected<LocalizationPageService> LocalizationPageService { get; set; }
@@ -31,6 +32,8 @@ namespace EPi.CmsLocalizationProvider
 
             bool updateContent;
             _updateContent = !bool.TryParse(config["updateContent"], out updateContent) || updateContent;
+            bool useSiteContainers;
+            _useSiteContainers = bool.TryParse(config["useSiteContainers"], out useSiteContainers) && useSiteContainers;
             _prefix = config["prefix"] ?? "custom";
         }
 
@@ -88,12 +91,12 @@ namespace EPi.CmsLocalizationProvider
             var site = SiteDefinition.Current;
 
             IContent siteLocalizationPage = null;
-            if (site != null)
+            if (_useSiteContainers && site != null)
                 siteLocalizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, site, new LoaderOptions { LanguageLoaderOption.FallbackWithMaster(culture) });
 
             var rootLocalizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, new LoaderOptions { LanguageLoaderOption.FallbackWithMaster(culture) });
 
-            if ((rootLocalizationPage == null || (site != null && siteLocalizationPage == null)) && _updateContent)
+            if ((rootLocalizationPage == null || (_useSiteContainers && site != null && siteLocalizationPage == null)) && _updateContent)
             {
                 lock (Lock)
                 {
@@ -102,7 +105,7 @@ namespace EPi.CmsLocalizationProvider
                         rootLocalizationPage = LocalizationPageService.Service.AddLocalizationPage(normalizedKey);
 
                     // If a site is present, make sure the page exists in the site.
-                    if (site != null && siteLocalizationPage == null)
+                    if (_useSiteContainers && site != null && siteLocalizationPage == null)
                         siteLocalizationPage = LocalizationPageService.Service.AddLocalizationPage(normalizedKey, site);
                 }
             }

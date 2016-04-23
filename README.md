@@ -6,7 +6,7 @@ Add or replace the following localization node in the web.config:
 ```xml
 <localization fallbackBehavior="FallbackCulture, MissingMessage, Echo" fallbackCulture="en">
     <providers>
-        <add updatePageTypeDefinition="true" prefix="your-project-name" name="customLabels" type="EPi.CmsLocalizationProvider.CmsLocalizationProvider, EPi.CmsLocalizationProvider" />
+        <add updatePageTypeDefinition="true" prefix="your-project-name" useSiteContainers="true" name="customLabels" type="EPi.CmsLocalizationProvider.CmsLocalizationProvider, EPi.CmsLocalizationProvider" />
     </providers>
 </localization>
 ```
