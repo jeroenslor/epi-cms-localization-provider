@@ -335,7 +335,7 @@ namespace EPi.CmsLocalizationProvider
                 if (containers.Count() > 1)
                     throw new InvalidOperationException("The root page has more than 1 instance of the Localizations container in its children, this is not allowed");
 
-                return containers.Single();
+                return containers.SingleOrDefault();
             }
             catch (ContentProviderNotFoundException)
             {
