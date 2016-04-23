@@ -150,10 +150,16 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Caching\CacheAccessor.cs" />
+    <Compile Include="Caching\CachedLocalizationContainer.cs" />
+    <Compile Include="Caching\IIsDirty.cs" />
+    <Compile Include="Caching\LocalizationCache.cs" />
+    <Compile Include="Caching\CachedLocalizationPage.cs" />
+    <Compile Include="Caching\CachedLocalizationSite.cs" />
     <Compile Include="LocalizationPageService.cs" />
-    <Compile Include="LocalizationConfiguration.cs" />
     <Compile Include="Model\LocalizationContainer.cs" />
     <Compile Include="Model\LocalizationPage.cs" />
+    <Compile Include="Model\LocalizationPagePair.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <Compile Include="CmsLocalizationProvider.cs" />
   </ItemGroup>
@@ -161,6 +167,7 @@
     <None Include="EPi.CmsLocalizationProvider.nuspec" />
     <None Include="packages.config" />
   </ItemGroup>
+  <ItemGroup />
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
        Other similar extension points exist, see Microsoft.Common.targets.

@@ -4,10 +4,12 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Globalization;
 using System.Linq;
+using EPi.CmsLocalizationProvider.Model;
 using EPiServer.Core;
 using EPiServer.DataAbstraction;
 using EPiServer.Framework.Localization;
 using EPiServer.ServiceLocation;
+using EPiServer.Web;
 
 namespace EPi.CmsLocalizationProvider
 {
@@ -16,6 +18,7 @@ namespace EPi.CmsLocalizationProvider
         #region fields
         private static readonly object Lock = new object();
         private static bool _updateContent;
+        private static bool _useSiteContainers;
         private static string _prefix;
         private static ConcurrentDictionary<string, string> PropertyDefinitionMapping;
         private static Injected<LocalizationPageService> LocalizationPageService { get; set; }
@@ -29,6 +32,8 @@ namespace EPi.CmsLocalizationProvider
 
             bool updateContent;
             _updateContent = !bool.TryParse(config["updateContent"], out updateContent) || updateContent;
+            bool useSiteContainers;
+            _useSiteContainers = bool.TryParse(config["useSiteContainers"], out useSiteContainers) && useSiteContainers;
             _prefix = config["prefix"] ?? "custom";
         }
 
@@ -38,12 +43,12 @@ namespace EPi.CmsLocalizationProvider
             if (!IsSupportedKey(normalizedKey))
                 return null;
 
-            var localizationPage = GetOrAddLocalizationPage(normalizedKey, culture);
-            if (localizationPage == null)
+            var localizationPages = GetOrAddLocalizationPages(normalizedKey, culture);
+            if (localizationPages == null || (localizationPages.SiteLocalizationPage == null && localizationPages.RootLocalizationPage == null))
                 return null;
 
-            return GetOrAddPropertyValue(originalKey, normalizedKey, localizationPage);
-        }        
+            return GetValueFromLocalizationPagePair(originalKey, normalizedKey, localizationPages);
+        }
 
         public override IEnumerable<ResourceItem> GetAllStrings(string originalKey, string[] normalizedKey, CultureInfo culture)
         {
@@ -53,35 +58,76 @@ namespace EPi.CmsLocalizationProvider
 
             // TODO if the normalizedkey length is 1 we need to loop through all the pages and return the result
 
-            var localizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, new LoaderOptions() {LanguageLoaderOption.FallbackWithMaster(culture)});
-            if (localizationPage == null)
+            var site = SiteDefinition.Current;
+
+            IContent siteLocalizationPage = null;
+            if (site != null)
+                siteLocalizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, site, new LoaderOptions() { LanguageLoaderOption.FallbackWithMaster(culture) });
+
+            var rootLocalizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, new LoaderOptions() { LanguageLoaderOption.FallbackWithMaster(culture) });
+            if (siteLocalizationPage == null && rootLocalizationPage == null)
                 yield break;
 
             var path = originalKey[originalKey.Length - 1].Equals('/') ? originalKey : originalKey + "/";
-            foreach (
-                var property in
-                    ServiceLocator.Current.GetInstance<IContentTypeRepository>()
-                        .Load(localizationPage.ContentTypeID)
-                        .PropertyDefinitions.Where(x => x.HelpText.Contains(path)))
-                yield return new ResourceItem(property.HelpText, (string) localizationPage.Property[property.Name].Value, culture);
+            foreach (var property in
+                ServiceLocator.Current.GetInstance<IContentTypeRepository>()
+                    .Load(rootLocalizationPage.ContentTypeID)
+                    .PropertyDefinitions.Where(x => x.HelpText.Contains(path)))
+            {
+                // Get values from both the site and root localization page to make sure the properties are created on both pages
+                string siteValue = null;
+                if (siteLocalizationPage != null)
+                    siteValue = (string)siteLocalizationPage.Property[property.Name].Value;
+
+                var rootValue = (string)rootLocalizationPage.Property[property.Name].Value;
+
+                yield return new ResourceItem(property.HelpText, !string.IsNullOrEmpty(siteValue) ? siteValue : rootValue, culture);
+            }
+
         }
 
-        private static IContent GetOrAddLocalizationPage(string[] normalizedKey, CultureInfo culture)
+        private static LocalizationPagePair GetOrAddLocalizationPages(string[] normalizedKey, CultureInfo culture)
         {
-            var localizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey,
-                new LoaderOptions() { LanguageLoaderOption.FallbackWithMaster(culture) });
+            var site = SiteDefinition.Current;
 
-            if (localizationPage == null && _updateContent)
+            IContent siteLocalizationPage = null;
+            if (_useSiteContainers && site != null)
+                siteLocalizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, site, new LoaderOptions { LanguageLoaderOption.FallbackWithMaster(culture) });
+
+            var rootLocalizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey, new LoaderOptions { LanguageLoaderOption.FallbackWithMaster(culture) });
+
+            if ((rootLocalizationPage == null || (_useSiteContainers && site != null && siteLocalizationPage == null)) && _updateContent)
+            {
                 lock (Lock)
                 {
-                    localizationPage = LocalizationPageService.Service.GetLocalizationPage(normalizedKey,
-                        new LoaderOptions() { LanguageLoaderOption.FallbackWithMaster(culture) });
+                    // Make sure the page exists in the root
+                    if (rootLocalizationPage == null)
+                        rootLocalizationPage = LocalizationPageService.Service.AddLocalizationPage(normalizedKey);
 
-                    if (localizationPage == null)
-                        localizationPage = LocalizationPageService.Service.AddLocalizationPage(normalizedKey);
+                    // If a site is present, make sure the page exists in the site.
+                    if (_useSiteContainers && site != null && siteLocalizationPage == null)
+                        siteLocalizationPage = LocalizationPageService.Service.AddLocalizationPage(normalizedKey, site);
                 }
+            }
 
-            return localizationPage;
+
+            return new LocalizationPagePair
+            {
+                RootLocalizationPage = rootLocalizationPage,
+                SiteLocalizationPage = siteLocalizationPage
+            };
+        }
+
+        private static string GetValueFromLocalizationPagePair(string originalKey, string[] normalizedKey, LocalizationPagePair localizationPages)
+        {
+            // Get values from both the site and root localization page to make sure the properties are created on both pages
+            string siteValue = null;
+            if (localizationPages.SiteLocalizationPage != null)
+                siteValue = GetOrAddPropertyValue(originalKey, normalizedKey, localizationPages.SiteLocalizationPage);
+
+            var rootValue = GetOrAddPropertyValue(originalKey, normalizedKey, localizationPages.RootLocalizationPage);
+
+            return !string.IsNullOrEmpty(siteValue) ? siteValue : rootValue;
         }
 
         private static string GetOrAddPropertyValue(string originalKey, string[] normalizedKey,
@@ -103,10 +149,10 @@ namespace EPi.CmsLocalizationProvider
                         LocalizationPageService.Service.UpdatePageTypeDefinition(localizationPage, originalKey, normalizedKey, hashedPropertyName);
 
             return value;
-        }        
+        }
 
         private static bool IsSupportedKey(string[] normalizedKey)
-        {            
+        {
             return normalizedKey[0].Equals(_prefix, StringComparison.OrdinalIgnoreCase);
         }
 
